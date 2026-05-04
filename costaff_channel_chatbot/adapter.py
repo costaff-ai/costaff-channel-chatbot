@@ -42,3 +42,11 @@ class ChannelAdapter(ABC):
         """Download an attachment object (from `IncomingMessage.attachments`).
 
         Returns (raw bytes, suggested filename)."""
+
+    @abstractmethod
+    async def push(self, real_id: str, text: str) -> None:
+        """Send `text` to `real_id` without an inbound message context.
+
+        Used for unsolicited sends (broadcasts, restored sessions, scheduled
+        notifications). On platforms with reply-token semantics (LINE), this
+        must use the push API, not the reply API."""

@@ -37,10 +37,18 @@ class MyAdapter(ChannelAdapter):
         # return (file_bytes, suggested_filename)
         ...
 
+    async def push(self, real_id: str, text: str) -> None:
+        # send `text` to `real_id` without an inbound message context
+        # (for restore_sessions, broadcasts, scheduled notifications).
+        ...
+
 setup_logging("INFO")
 runtime = ChannelRuntime(MyAdapter())
 
-# In your platform's event handler:
+# Bot startup: greet every known user with a fresh session.
+await runtime.restore_sessions()
+
+# Inbound message handler:
 await runtime.handle_message(IncomingMessage(
     real_id=str(platform_user_id),
     text=text,
@@ -48,6 +56,53 @@ await runtime.handle_message(IncomingMessage(
     raw=platform_message,  # opaque, passed back to adapter methods
     message_id=str(platform_message_id),  # for dedup
 ))
+
+# /reset command handler:
+await runtime.handle_reset(IncomingMessage(
+    real_id=str(platform_user_id),
+    text="",
+    raw=platform_message,
+    message_id=str(platform_message_id),
+))
+```
+
+## Customizing system messages
+
+`ChannelRuntime` accepts overrides for the four built-in strings. Useful for
+i18n or tonal adjustments:
+
+```python
+runtime = ChannelRuntime(
+    MyAdapter(),
+    pending_msg="⌛ Account pending approval...",
+    rate_limit_msg="⏳ Slow down — too many messages.",
+    error_msg="Sorry, something went wrong.",
+    reset_msg="🔄 Conversation reset.",
+)
+```
+
+## LINE adapter note (reply-token semantics)
+
+LINE's `reply_token` expires after 30 seconds and can only be used once. If
+the agent takes longer than 30s, the reply token will be dead by the time
+the runtime calls `reply`. Pattern:
+
+```python
+async def on_line_event(event):
+    # Burn the reply token immediately so the user sees an ack.
+    await line_bot_api.reply_message(event.reply_token, "⌛ 處理中…")
+
+    # Hand off to runtime — its `reply` calls will use push API instead.
+    await runtime.handle_message(IncomingMessage(...))
+
+
+class LineAdapter(ChannelAdapter):
+    async def reply(self, msg, text):
+        # Use push API, not reply_message. The reply token is gone.
+        await line_bot_api.push_message(msg.real_id, TextSendMessage(text=text))
+
+    async def push(self, real_id, text):
+        await line_bot_api.push_message(real_id, TextSendMessage(text=text))
 ```
 
 ## What the runtime does (in order)
