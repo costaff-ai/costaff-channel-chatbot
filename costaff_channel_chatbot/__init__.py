@@ -1,0 +1,52 @@
+"""costaff-channel-chatbot — shared runtime for chatbot-style channels."""
+from .adapter import ChannelAdapter, IncomingMessage
+from .adk_client import (
+    check_approved,
+    create_new_session,
+    delete_session,
+    get_active_session_id,
+    get_user_id,
+    run_adk_prompt,
+    set_active_session_id,
+    setup_logging,
+    sync_identity,
+)
+from .dedup import MessageDedup
+from .rate_limit import RateLimiter
+from .response import (
+    ATTACHMENT_HINT,
+    DATA_ROOT,
+    extract_path_candidates,
+    resolve_path,
+    rewrite_with_hint,
+    truncate,
+)
+from .runtime import ChannelRuntime, ERROR_MSG, PENDING_MSG, RATE_LIMIT_MSG
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "ChannelAdapter",
+    "ChannelRuntime",
+    "IncomingMessage",
+    "MessageDedup",
+    "RateLimiter",
+    "ATTACHMENT_HINT",
+    "DATA_ROOT",
+    "ERROR_MSG",
+    "PENDING_MSG",
+    "RATE_LIMIT_MSG",
+    "check_approved",
+    "create_new_session",
+    "delete_session",
+    "extract_path_candidates",
+    "get_active_session_id",
+    "get_user_id",
+    "resolve_path",
+    "rewrite_with_hint",
+    "run_adk_prompt",
+    "set_active_session_id",
+    "setup_logging",
+    "sync_identity",
+    "truncate",
+]
