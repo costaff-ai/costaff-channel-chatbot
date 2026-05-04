@@ -14,8 +14,9 @@ DATA_ROOT = os.environ.get("SHARED_DIR", "/app/data/shared")
 _FILE_EXTS = "pdf|docx|md|txt|html|htm|png|jpg|jpeg|gif|csv|json|xlsx|xls|zip"
 _TAG_PATTERN = re.compile(r"[\[\(](?:FILE|檔案)[:：]\s*([^\]\)\s]+)[\]\)]", re.IGNORECASE)
 _ABS_PATTERN = re.compile(r"(/app/data/[\w./-]+\.(?:" + _FILE_EXTS + r"))", re.IGNORECASE)
-_TAG_HINT_PATTERN = re.compile(r"[\[\(](?:FILE|檔案)[:：]\s*（詳見附件）\s*[\]\)]", re.IGNORECASE)
-_DUP_HINT_PATTERN = re.compile(r"(（詳見附件）\s*)+")
+_FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]+`")
+_CODE_TOKEN = "__COSTAFF_CODE_BLOCK_{i}__"
 ATTACHMENT_HINT = "（詳見附件）"
 
 
@@ -61,10 +62,49 @@ def extract_path_candidates(text: str) -> list[str]:
     return list(dict.fromkeys(tags + paths))
 
 
-def rewrite_with_hint(text: str, raw_path: str) -> str:
-    text = text.replace(raw_path, ATTACHMENT_HINT)
-    text = _TAG_HINT_PATTERN.sub(ATTACHMENT_HINT, text)
-    text = _DUP_HINT_PATTERN.sub(ATTACHMENT_HINT, text).strip()
+def rewrite_with_hint(text: str, raw_path: str, hint: str = ATTACHMENT_HINT) -> str:
+    """Replace `raw_path` with `hint` in `text`."""
+    return text.replace(raw_path, hint)
+
+
+def strip_leftover_hints(text: str, hint: str = ATTACHMENT_HINT) -> str:
+    """Remove orphan [FILE: hint] wrappers and collapse repeated hints.
+
+    Use after all `rewrite_with_hint` calls — each substitution can leave
+    `[FILE: <hint>]` wrappers (because the inner path was already replaced)
+    or duplicate adjacent hints. Pattern is built dynamically because the
+    hint string is adapter-specific (markdown varies)."""
+    escaped = re.escape(hint)
+    leftover = re.compile(
+        r"[\[\(](?:FILE|檔案)[:：]\s*" + escaped + r"\s*[\]\)]", re.IGNORECASE
+    )
+    duplicates = re.compile(r"(" + escaped + r"\s*){2,}")
+    text = leftover.sub(hint, text)
+    text = duplicates.sub(hint, text).strip()
+    return text
+
+
+def protect_code_blocks(text: str) -> tuple[str, list[str]]:
+    """Replace fenced and inline code blocks with placeholder tokens.
+
+    Returns (protected_text, blocks). Path-replacement passes can run on
+    `protected_text` without corrupting code; call `restore_code_blocks`
+    when done. Order matters: fenced (```...```) must be masked first
+    so its inner backticks are not picked up as inline code."""
+    blocks: list[str] = []
+
+    def _mask(match: re.Match) -> str:
+        blocks.append(match.group(0))
+        return _CODE_TOKEN.format(i=len(blocks) - 1)
+
+    text = _FENCED_CODE_RE.sub(_mask, text)
+    text = _INLINE_CODE_RE.sub(_mask, text)
+    return text, blocks
+
+
+def restore_code_blocks(text: str, blocks: list[str]) -> str:
+    for i, block in enumerate(blocks):
+        text = text.replace(_CODE_TOKEN.format(i=i), block)
     return text
 
 

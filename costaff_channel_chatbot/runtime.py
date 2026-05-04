@@ -24,8 +24,11 @@ from .response import (
     ATTACHMENT_HINT,
     DATA_ROOT,
     extract_path_candidates,
+    protect_code_blocks,
     resolve_path,
+    restore_code_blocks,
     rewrite_with_hint,
+    strip_leftover_hints,
     truncate,
 )
 
@@ -35,6 +38,7 @@ DEFAULT_PENDING_MSG = "⌛ 您的帳號正在等待管理員審核中..."
 DEFAULT_RATE_LIMIT_MSG = "⏳ 訊息太頻繁，請稍後再試。"
 DEFAULT_ERROR_MSG = "很抱歉，處理您的請求時發生錯誤，請稍後再試。"
 DEFAULT_RESET_MSG = "🔄 對話已重置，請稍候…"
+DEFAULT_FILES_ONLY_MSG = "任務已完成！ 以下是產出的檔案 {hint}"
 
 # Backward-compat aliases (older code may import the un-prefixed names).
 PENDING_MSG = DEFAULT_PENDING_MSG
@@ -220,22 +224,43 @@ class ChannelRuntime:
         """Strip file references out of the agent reply, send the files via
         the adapter, then send the cleaned text reply (truncated to the
         adapter's max length)."""
-        clean = final_res
-        delivered = 0
-        for raw in extract_path_candidates(final_res):
+        hint = self.adapter.attachment_hint
+        # Detect candidate paths against the original text — paths quoted
+        # inside code blocks should still be delivered. Replacement happens
+        # on a code-block-masked copy so we don't corrupt the code.
+        candidates = extract_path_candidates(final_res)
+        protected, code_blocks = protect_code_blocks(final_res)
+
+        delivered_paths: list[str] = []
+        for raw in candidates:
             resolved = resolve_path(raw, wait_seconds=2.0)
             if resolved:
-                clean = rewrite_with_hint(clean, raw)
-                try:
-                    await self.adapter.send_file(msg, resolved)
-                    delivered += 1
-                except Exception as e:
-                    logger.error(f"send_file failed for {resolved}: {e}")
+                protected = rewrite_with_hint(protected, raw, hint)
+                delivered_paths.append(resolved)
             else:
                 logger.warning(f"Failed to resolve file reference: {raw}")
 
-        text = clean if delivered > 0 else final_res
-        await self.adapter.reply(msg, truncate(text, self.adapter.max_message_length))
+        clean = restore_code_blocks(protected, code_blocks)
+        clean = strip_leftover_hints(clean, hint)
+
+        if delivered_paths:
+            if not clean or clean == hint:
+                clean = DEFAULT_FILES_ONLY_MSG.format(hint=hint)
+            try:
+                await self.adapter.deliver(
+                    msg,
+                    truncate(clean, self.adapter.max_message_length),
+                    delivered_paths,
+                )
+            except Exception as e:
+                logger.error(f"deliver failed: {e}")
+                await self.adapter.reply(
+                    msg, truncate(final_res, self.adapter.max_message_length)
+                )
+        else:
+            await self.adapter.reply(
+                msg, truncate(final_res, self.adapter.max_message_length)
+            )
 
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")

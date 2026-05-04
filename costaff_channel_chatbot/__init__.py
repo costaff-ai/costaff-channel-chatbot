@@ -17,8 +17,11 @@ from .response import (
     ATTACHMENT_HINT,
     DATA_ROOT,
     extract_path_candidates,
+    protect_code_blocks,
     resolve_path,
+    restore_code_blocks,
     rewrite_with_hint,
+    strip_leftover_hints,
     truncate,
 )
 from .runtime import (
@@ -55,8 +58,11 @@ __all__ = [
     "extract_path_candidates",
     "get_active_session_id",
     "get_user_id",
+    "protect_code_blocks",
     "resolve_path",
+    "restore_code_blocks",
     "rewrite_with_hint",
+    "strip_leftover_hints",
     "run_adk_prompt",
     "set_active_session_id",
     "setup_logging",

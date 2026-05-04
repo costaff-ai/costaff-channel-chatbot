@@ -29,6 +29,10 @@ class ChannelAdapter(ABC):
     # Per-platform reply size cap; runtime truncates before calling reply().
     max_message_length: int = 4096
 
+    # Inserted in place of resolved file paths in agent text. Use the
+    # platform's bold/italic markdown if you want it visually distinct.
+    attachment_hint: str = "（詳見附件）"
+
     @abstractmethod
     async def reply(self, msg: IncomingMessage, text: str) -> None:
         """Send `text` back to the sender of `msg`."""
@@ -50,3 +54,15 @@ class ChannelAdapter(ABC):
         Used for unsolicited sends (broadcasts, restored sessions, scheduled
         notifications). On platforms with reply-token semantics (LINE), this
         must use the push API, not the reply API."""
+
+    async def deliver(
+        self, msg: IncomingMessage, text: str, file_paths: list[str]
+    ) -> None:
+        """Send `text` plus zero-or-more file attachments back to `msg`.
+
+        Default implementation: each file as a separate message via
+        `send_file`, then `text` last. Override for platforms that can bundle
+        attachments into a single message (e.g. Discord, Slack)."""
+        for path in file_paths:
+            await self.send_file(msg, path)
+        await self.reply(msg, text)
