@@ -64,7 +64,16 @@ def extract_path_candidates(text: str) -> list[str]:
 
 
 def rewrite_with_hint(text: str, raw_path: str, hint: str = ATTACHMENT_HINT) -> str:
-    """Replace `raw_path` with `hint` in `text`."""
+    """Replace `[FILE: raw_path]` (or `[檔案: raw_path]`, paren variants) with `hint`,
+    dropping the wrapper. Falls back to bare `raw_path` replacement if no wrapper
+    is found, so prose mentions still work."""
+    wrapper_re = re.compile(
+        r"[\[\(](?:FILE|檔案)[:：]\s*" + re.escape(raw_path) + r"\s*[\]\)]",
+        re.IGNORECASE,
+    )
+    new_text, n = wrapper_re.subn(hint, text)
+    if n > 0:
+        return new_text
     return text.replace(raw_path, hint)
 
 

@@ -235,7 +235,7 @@ class ChannelRuntime:
         for raw in candidates:
             resolved = resolve_path(raw, wait_seconds=2.0)
             if resolved:
-                protected = rewrite_with_hint(protected, raw, hint)
+                protected = rewrite_with_hint(protected, raw, os.path.basename(resolved))
                 delivered_paths.append(resolved)
             else:
                 logger.warning(f"Failed to resolve file reference: {raw}")
