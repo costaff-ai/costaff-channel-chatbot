@@ -14,6 +14,7 @@ DATA_ROOT = os.environ.get("SHARED_DIR", "/app/data/shared")
 _FILE_EXTS = "pdf|docx|md|txt|html|htm|png|jpg|jpeg|gif|csv|json|xlsx|xls|zip"
 _TAG_PATTERN = re.compile(r"[\[\(](?:FILE|檔案)[:：]\s*([^\]\)\s]+)[\]\)]", re.IGNORECASE)
 _ABS_PATTERN = re.compile(r"(/app/data/[\w./-]+\.(?:" + _FILE_EXTS + r"))", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"</?\w+[^>]*>")
 _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`]+`")
 _CODE_TOKEN = "__COSTAFF_CODE_BLOCK_{i}__"
@@ -26,7 +27,7 @@ def resolve_path(raw: str, wait_seconds: float = 0) -> str | None:
     Tries the raw path, then DATA_ROOT/raw, then any `agent-*` subdir of
     DATA_ROOT (file basename or trailing data/-suffix). Polls on a short
     interval up to `wait_seconds` to absorb volume sync delays."""
-    raw = raw.strip().strip("`").strip("'").strip('"')
+    raw = _HTML_TAG_RE.sub("", raw).strip().strip("`").strip("'").strip('"')
     fname = os.path.basename(raw)
 
     candidates: list[str] = []
