@@ -25,8 +25,13 @@ def resolve_path(raw: str, wait_seconds: float = 0) -> str | None:
     """Resolve `raw` (absolute or relative) to an existing file path.
 
     Tries the raw path, then DATA_ROOT/raw, then any `agent-*` subdir of
-    DATA_ROOT (file basename or trailing data/-suffix). Polls on a short
-    interval up to `wait_seconds` to absorb volume sync delays."""
+    DATA_ROOT (file basename or trailing data/-suffix). If none of those
+    shallow candidates match, falls back to `_find_in_deepest_existing_parent`
+    which walks the deepest-existing ancestor of the requested path looking
+    for the basename — recovering cases where the agent wrote files into a
+    per-task subdirectory but Manager's callback omitted that subdir level.
+    Polls on a short interval up to `wait_seconds` to absorb volume sync
+    delays."""
     raw = _HTML_TAG_RE.sub("", raw).strip().strip("`").strip("'").strip('"')
     fname = os.path.basename(raw)
 
@@ -52,9 +57,66 @@ def resolve_path(raw: str, wait_seconds: float = 0) -> str | None:
         for cand in candidates:
             if os.path.exists(cand) and os.path.isfile(cand):
                 return cand
+        # Last-resort recursive search scoped to the deepest existing
+        # ancestor of the requested path. Returns only on a SINGLE match
+        # to avoid delivering the wrong file when basenames collide.
+        recursive_hit = _find_in_deepest_existing_parent(raw)
+        if recursive_hit:
+            return recursive_hit
         if time.time() - start >= wait_seconds:
             return None
         time.sleep(0.3)
+
+
+def _find_in_deepest_existing_parent(requested_path: str) -> str | None:
+    """Recursive fallback for resolve_path.
+
+    Walks up from the requested path's parent to find the deepest directory
+    that actually exists, then walks that subtree for files matching the
+    requested basename. The scoped walk prevents wrong-agent delivery when
+    a basename happens to exist under multiple agent directories. Returns
+    None when there is no match or when the match is ambiguous (more than
+    one file with the same basename inside the scope).
+
+    Example: requested = /app/data/shared/costaff-agent-ba/sales_q2.pdf
+             exists  = /app/data/shared/costaff-agent-ba/q2-report/sales_q2.pdf
+    The deepest existing parent is `/app/data/shared/costaff-agent-ba/`,
+    so the recursive walk finds the file one directory deeper.
+    """
+    if not requested_path:
+        return None
+    basename = os.path.basename(requested_path)
+    if not basename:
+        return None
+
+    parent = os.path.dirname(requested_path)
+    # Climb up until we find an existing directory, but never escape DATA_ROOT
+    while parent and not os.path.isdir(parent):
+        new_parent = os.path.dirname(parent)
+        if new_parent == parent:
+            return None
+        parent = new_parent
+    if not parent or not os.path.isdir(parent):
+        return None
+    # Refuse to recurse if we've climbed all the way out of DATA_ROOT —
+    # an unscoped walk could match anywhere on disk.
+    try:
+        if os.path.commonpath([parent, DATA_ROOT]) != os.path.realpath(DATA_ROOT) and \
+           os.path.commonpath([parent, DATA_ROOT]) != DATA_ROOT:
+            return None
+    except (ValueError, OSError):
+        return None
+
+    matches: list[str] = []
+    try:
+        for dirpath, _, filenames in os.walk(parent):
+            if basename in filenames:
+                matches.append(os.path.join(dirpath, basename))
+                if len(matches) > 1:
+                    return None  # ambiguous — refuse to guess
+    except OSError:
+        return None
+    return matches[0] if matches else None
 
 
 def extract_path_candidates(text: str) -> list[str]:
