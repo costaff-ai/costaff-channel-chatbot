@@ -74,7 +74,7 @@ class ChannelRuntime:
         uid = get_user_id(msg.real_id)
         default_sid = f"{self.adapter.platform_prefix}_{uid}"
         sid = get_active_session_id(uid, default_sid)
-        sync_identity(uid, msg.real_id, default_sid)
+        sync_identity(uid, msg.real_id, default_sid, message_id=msg.message_id)
 
         if not check_approved(default_sid):
             await self.adapter.reply(msg, self.pending_msg)
@@ -98,7 +98,7 @@ class ChannelRuntime:
 
         uid = get_user_id(msg.real_id)
         default_sid = f"{self.adapter.platform_prefix}_{uid}"
-        sync_identity(uid, msg.real_id, default_sid)
+        sync_identity(uid, msg.real_id, default_sid, message_id=msg.message_id)
 
         if not check_approved(default_sid):
             await self.adapter.reply(msg, self.pending_msg)

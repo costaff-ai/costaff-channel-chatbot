@@ -32,19 +32,24 @@ try:
         real_id = Column(String, nullable=False)
         is_approved = Column(Boolean, default=False, nullable=False)
         active_session_id = Column(String, nullable=True)
+        last_message_id = Column(String, nullable=True)
         created_at = Column(DateTime, default=datetime.utcnow)
         updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     db_uri = os.getenv("ADK_SESSION_SERVICE_URI", "sqlite:///./costaff_agent.db")
     engine = create_engine(db_uri.replace("postgresql+asyncpg://", "postgresql://"))
     Base.metadata.create_all(engine)
-    # Migration: add active_session_id column to existing tables that predate it
+    # Migrations: add columns to existing tables that predate them
     with engine.connect() as _conn:
-        try:
-            _conn.execute(text("ALTER TABLE identity_maps ADD COLUMN active_session_id VARCHAR"))
-            _conn.commit()
-        except Exception:
-            pass  # column already exists
+        for _col_ddl in (
+            "ALTER TABLE identity_maps ADD COLUMN active_session_id VARCHAR",
+            "ALTER TABLE identity_maps ADD COLUMN last_message_id VARCHAR",
+        ):
+            try:
+                _conn.execute(text(_col_ddl))
+                _conn.commit()
+            except Exception:
+                pass  # column already exists
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     models = type('obj', (object,), {'IdentityMap': IdentityMap})
 except ImportError:
@@ -56,8 +61,11 @@ def get_user_id(real_id: any) -> str:
     salt = os.getenv("ID_SALT", "costaff_default_salt")
     return hashlib.sha256(f"{real_id}{salt}".encode()).hexdigest()[:16]
 
-def sync_identity(hashed_id: str, real_id: str, session_id: str):
-    """Saves the mapping between hashed ID and real platform ID."""
+def sync_identity(hashed_id: str, real_id: str, session_id: str, message_id: str | None = None):
+    """Saves the mapping between hashed ID and real platform ID. When
+    `message_id` is provided, stores it as the most recent inbound message id
+    on this session — used by the notifier as a `reply_to_message_id` target
+    so async callbacks can quote the user's original question."""
     if not SessionLocal:
         logger.warning("sync_identity: SessionLocal not available, skipping")
         return
@@ -66,10 +74,15 @@ def sync_identity(hashed_id: str, real_id: str, session_id: str):
         m = db.query(models.IdentityMap).filter(models.IdentityMap.session_id == session_id).first()
         if not m:
             logger.info(f"sync_identity: creating new identity for session_id={session_id}")
-            db.add(models.IdentityMap(session_id=session_id, hashed_id=hashed_id, real_id=real_id, is_approved=False))
+            db.add(models.IdentityMap(
+                session_id=session_id, hashed_id=hashed_id, real_id=real_id,
+                is_approved=False, last_message_id=message_id,
+            ))
         else:
             m.real_id = real_id
             m.hashed_id = hashed_id
+            if message_id is not None:
+                m.last_message_id = message_id
         db.commit()
         logger.info(f"sync_identity: committed session_id={session_id}")
     except Exception as e:
