@@ -182,13 +182,21 @@ class ChannelRuntime:
                 fpath = uploads_dir / fname
                 fpath.write_bytes(data)
                 uploaded.append(str(fpath))
-                if _looks_like_image(fname):
+                # Inline as a visual part if the bytes ARE an image
+                # (content sniff — robust to *.HEIC / no-extension / files)
+                # or the filename looks like one. Sniffed mime wins.
+                sniffed = _sniff_image_mime(data)
+                if sniffed or _looks_like_image(fname):
                     parts.append({
                         "inlineData": {
-                            "mimeType": _mime_for(fname),
+                            "mimeType": sniffed or _mime_for(fname),
                             "data": base64.b64encode(data).decode(),
                         }
                     })
+                    logger.info(
+                        "inlined image attachment %s as %s (%d bytes)",
+                        fname, sniffed or _mime_for(fname), len(data),
+                    )
 
         if uploaded:
             note = f"（使用者上傳了檔案，已存放在 SHARED_DIR/uploads/：{', '.join(uploaded)}）"
@@ -279,4 +287,38 @@ def _mime_for(fname: str) -> str:
         ".gif": "image/gif",
         ".webp": "image/webp",
         ".bmp": "image/bmp",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
     }.get(ext, "application/octet-stream")
+
+
+def _sniff_image_mime(data: bytes):
+    """Detect an image by content (magic bytes), regardless of filename.
+
+    Filenames are unreliable: phones attach photos as files named
+    *.HEIC, IMG_xxxx, or with no extension at all, so the extension
+    check alone silently fails to inline them as a visual part and the
+    agent only ever sees a file path. Sniffing the bytes makes
+    "send as file" (uncompressed, full-resolution) actually reach the
+    model as pixels. Returns an image mime or None.
+    """
+    if not data or len(data) < 12:
+        return None
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[4:8] == b"ftyp":  # ISO-BMFF: HEIC/HEIF
+        brand = data[8:12]
+        if brand in (
+            b"heic", b"heix", b"hevc", b"heim", b"heis",
+            b"hevm", b"hevs", b"mif1", b"msf1", b"heif",
+        ):
+            return "image/heic"
+    return None
