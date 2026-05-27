@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 DATA_ROOT = os.environ.get("SHARED_DIR", "/app/data/shared")
 
-_FILE_EXTS = "pdf|docx|md|txt|html|htm|png|jpg|jpeg|gif|csv|json|xlsx|xls|zip"
+_FILE_EXTS = "pdf|docx|doc|pptx|ppt|md|txt|html|htm|png|jpg|jpeg|gif|webp|svg|csv|json|xlsx|xls|zip"
 _TAG_PATTERN = re.compile(r"[\[\(](?:FILE|檔案)[:：]\s*([^\]\)\s]+)[\]\)]", re.IGNORECASE)
 _ABS_PATTERN = re.compile(r"(/app/data/[\w./-]+\.(?:" + _FILE_EXTS + r"))", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"</?\w+[^>]*>")
