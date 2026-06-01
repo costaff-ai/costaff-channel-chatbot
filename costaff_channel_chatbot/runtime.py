@@ -73,7 +73,22 @@ class ChannelRuntime:
 
         uid = get_user_id(msg.real_id)
         default_sid = f"{self.adapter.platform_prefix}_{uid}"
-        sid = get_active_session_id(uid, default_sid)
+        # Per-conversation session pinning (multi-conv safe). A caller that
+        # manages its own per-thread ADK sessions (e.g. WebChat Enterprise,
+        # which has one adk_session_id per conversation) can set
+        # `msg.session_id_override` so we use THAT thread's session directly,
+        # bypassing the per-user `active_session_id` row. That row is a single
+        # value shared across all of a user's open conversations, so with
+        # concurrent threads it races (set by thread B between thread A's set
+        # and read) and progress/results leak into the wrong conversation.
+        # When no override is given (Telegram/Discord/etc. — one conversation
+        # per user) we keep the legacy active-session behaviour, so this is
+        # fully backward compatible.
+        sid_override = getattr(msg, "session_id_override", None)
+        if sid_override:
+            sid = sid_override
+        else:
+            sid = get_active_session_id(uid, default_sid)
         sync_identity(uid, msg.real_id, default_sid, message_id=msg.message_id)
 
         if not check_approved(default_sid):
