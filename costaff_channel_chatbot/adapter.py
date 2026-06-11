@@ -33,6 +33,17 @@ class ChannelAdapter(ABC):
     # platform's bold/italic markdown if you want it visually distinct.
     attachment_hint: str = "（詳見附件）"
 
+    def format_text(self, text: str) -> str:
+        """Convert agent Markdown into this platform's rendering format.
+
+        Called by the runtime on every outbound agent reply, BEFORE
+        splitting to max_message_length (so chunk boundaries respect the
+        converted markup). Default is passthrough; adapters override with
+        the matching converter from `costaff_channel_chatbot.formatters`
+        (e.g. md_to_telegram_html, md_to_discord, md_to_slack, md_to_plain).
+        """
+        return text
+
     @abstractmethod
     async def reply(self, msg: IncomingMessage, text: str) -> None:
         """Send `text` back to the sender of `msg`."""

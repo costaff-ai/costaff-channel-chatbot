@@ -19,6 +19,7 @@ from .adk_client import (
     sync_identity,
 )
 from .dedup import MessageDedup
+from .envelope import parse_result_envelope
 from .rate_limit import RateLimiter
 from .response import (
     ATTACHMENT_HINT,
@@ -28,6 +29,7 @@ from .response import (
     resolve_path,
     restore_code_blocks,
     rewrite_with_hint,
+    split_message,
     strip_leftover_hints,
     truncate,
 )
@@ -174,7 +176,9 @@ class ChannelRuntime:
                     sid,
                     prompt=f"(Context ID: {uid}). Please check my identity and greet me in {preferred_lang}.",
                 )
-                await self.adapter.push(user.real_id, res)
+                formatted = self.adapter.format_text(res)
+                for chunk in split_message(formatted, self.adapter.max_message_length):
+                    await self.adapter.push(user.real_id, chunk)
             except Exception as e:
                 logger.warning(f"restore_sessions: skipped {user.real_id}: {e}")
 
@@ -186,7 +190,10 @@ class ChannelRuntime:
 
         uploaded: list[str] = []
         if msg.attachments:
-            uploads_dir = Path(DATA_ROOT) / "uploads"
+            # Per-user subdirectory: two users uploading the same filename
+            # (e.g. image.jpg) must not overwrite — or read — each other's
+            # files on the shared volume.
+            uploads_dir = Path(DATA_ROOT) / "uploads" / uid
             uploads_dir.mkdir(parents=True, exist_ok=True)
             for att in msg.attachments:
                 try:
@@ -239,20 +246,31 @@ class ChannelRuntime:
             final_res = await run_adk_prompt(self.app_name, uid, sid, parts=parts)
         except Exception as e:
             logger.error(f"run_adk_prompt failed for sid={sid}: {e}")
-            await self.adapter.reply(msg, ERROR_MSG)
+            await self.adapter.reply(msg, self.error_msg)
             return
         await self.deliver_response(msg, final_res)
 
     async def deliver_response(self, msg: IncomingMessage, final_res: str) -> None:
         """Strip file references out of the agent reply, send the files via
-        the adapter, then send the cleaned text reply (truncated to the
-        adapter's max length)."""
+        the adapter, then send the cleaned text reply (formatted for the
+        platform and split to the adapter's max length)."""
         hint = self.adapter.attachment_hint
-        # Detect candidate paths against the original text — paths quoted
-        # inside code blocks should still be delivered. Replacement happens
-        # on a code-block-masked copy so we don't corrupt the code.
-        candidates = extract_path_candidates(final_res)
-        protected, code_blocks = protect_code_blocks(final_res)
+        # A structured RESULT envelope carries an explicit `files:` list —
+        # trust it over regex guessing (no false positives from paths
+        # mentioned in prose). Unstructured replies keep the legacy regex.
+        env = parse_result_envelope(final_res)
+        if env.structured and env.files:
+            candidates = env.files
+            base_text = env.summary or final_res
+        else:
+            # Detect candidate paths against the original text — paths quoted
+            # inside code blocks should still be delivered.
+            candidates = extract_path_candidates(final_res)
+            base_text = final_res
+
+        # Replacement happens on a code-block-masked copy so we don't
+        # corrupt the code.
+        protected, code_blocks = protect_code_blocks(base_text)
 
         delivered_paths: list[str] = []
         for raw in candidates:
@@ -266,24 +284,25 @@ class ChannelRuntime:
         clean = restore_code_blocks(protected, code_blocks)
         clean = strip_leftover_hints(clean, hint)
 
+        if delivered_paths and (not clean or clean == hint):
+            clean = DEFAULT_FILES_ONLY_MSG.format(hint=hint)
+
+        formatted = self.adapter.format_text(clean)
+        chunks = split_message(formatted, self.adapter.max_message_length) or [""]
+
         if delivered_paths:
-            if not clean or clean == hint:
-                clean = DEFAULT_FILES_ONLY_MSG.format(hint=hint)
             try:
-                await self.adapter.deliver(
-                    msg,
-                    truncate(clean, self.adapter.max_message_length),
-                    delivered_paths,
-                )
+                await self.adapter.deliver(msg, chunks[0], delivered_paths)
+                for extra in chunks[1:]:
+                    await self.adapter.reply(msg, extra)
             except Exception as e:
                 logger.error(f"deliver failed: {e}")
                 await self.adapter.reply(
-                    msg, truncate(final_res, self.adapter.max_message_length)
+                    msg, truncate(formatted, self.adapter.max_message_length)
                 )
         else:
-            await self.adapter.reply(
-                msg, truncate(final_res, self.adapter.max_message_length)
-            )
+            for chunk in chunks:
+                await self.adapter.reply(msg, chunk)
 
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")

@@ -1,0 +1,220 @@
+"""Channel-specific format adapters for outbound messages.
+
+Ported from costaff core (core/notifiers/formatters.py) so the channel
+reply path and the core notifier path share one conversion ruleset.
+
+Agents produce results in lightweight Markdown — `## heading`,
+`**bold**`, `` `code` ``, fenced ```code``` blocks, `- bullets`. Each
+platform has different rendering rules:
+
+  - Telegram (parse_mode=HTML): does NOT parse Markdown; needs the
+    full Markdown → HTML conversion. NO <h1..h6> tags allowed.
+  - Discord: renders Markdown natively (incl. # / ## / ### headings
+    since 2023, lists, bold, code, fenced code). Only the result
+    envelope markers need stripping.
+  - Slack: renders its own "mrkdwn" — *bold* (single asterisk), no
+    headings, `code` and fences work, links are <url|text>.
+  - LINE: text messages render no Markdown at all. Strip every
+    sigil so the user sees clean prose.
+
+What this module does NOT try to do: a real Markdown parser.
+`*italic*` / `_italic_` are intentionally NOT converted — single
+sigils collide with real content (`costaff_agent`, `2*pi`, file paths,
+identifiers) too often, and a misfire here is worse than rendering
+literal asterisks.
+"""
+from __future__ import annotations
+
+import re
+
+# ----- shared patterns ---------------------------------------------------
+
+_RESULT_TAG_RE = re.compile(r'\s*\[RESULT_(?:START|END)\]\s*')
+_MD_HEADING_RE = re.compile(r'^#{1,6}\s+(.+?)\s*$', re.MULTILINE)
+_MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*', re.DOTALL)
+_MD_CODE_INLINE_RE = re.compile(r'`([^`\n]+?)`')
+_MD_CODE_FENCE_RE = re.compile(r'```(?:\w+)?\n(.*?)```', re.DOTALL)
+_MD_BULLET_RE = re.compile(r'^(\s*)-\s+', re.MULTILINE)
+_MD_LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+# Literal `<code>` / `</code>` / `<pre>` / `</pre>` that the LLM put inside
+# its own backtick block (defensive double-encoding when it's unsure
+# whether the channel renders Markdown or HTML). Strip these before
+# wrapping in real <code>, otherwise we end up nesting them and leaving
+# an orphan closing tag after _escape_code_block_content's non-greedy
+# match.
+_INNER_CODE_TAG_RE = re.compile(r'</?(?:code|pre)>', re.IGNORECASE)
+# After md→html conversion, any `<` / `>` / `&` *inside* a <code> or <pre>
+# block must be HTML-escaped — Telegram's HTML parser is strict and chokes
+# on unescaped `<`/`>` (e.g. SQL operators like `<>`, `<=`), refusing the
+# whole message and falling back to plain text (raw <b> tags visible).
+_TG_CODE_BLOCK_RE = re.compile(r'<(code|pre)>(.*?)</\1>', re.DOTALL)
+
+
+def strip_result_envelope(text: str) -> str:
+    """Remove `[RESULT_START]` / `[RESULT_END]` markers from agent output.
+
+    These are an internal handoff signal between executor and manager,
+    never meant for the user. Called from every channel adapter so the
+    behaviour stays uniform.
+    """
+    if not text:
+        return text
+    return _RESULT_TAG_RE.sub('', text)
+
+
+# ----- Telegram (HTML) ---------------------------------------------------
+
+
+_ENTITY_RE = re.compile(r'&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);')
+
+
+def _escape_code_block_content(text: str) -> str:
+    """HTML-escape `<`, `>`, `&` inside <code>...</code> and <pre>...</pre>.
+
+    Required because Telegram's HTML parser refuses the entire message on
+    a single unescaped `<` outside a known tag — SQL with `<>` / `<=` is
+    the common case. Tag names themselves stay intact; only the BODY
+    between opening and closing tags gets escaped.
+
+    Idempotent: an already-escaped `&lt;` doesn't get re-escaped to
+    `&amp;lt;`. We detect existing entities via _ENTITY_RE and skip them
+    when escaping `&`.
+    """
+    def _esc(m: re.Match) -> str:
+        tag, body = m.group(1), m.group(2)
+        # Step 1: escape bare `&` (but not `&` that's already starting an entity).
+        body = re.sub(r'&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)', '&amp;', body)
+        # Step 2: now safe to escape `<` and `>`.
+        body = body.replace("<", "&lt;").replace(">", "&gt;")
+        return f"<{tag}>{body}</{tag}>"
+    return _TG_CODE_BLOCK_RE.sub(_esc, text)
+
+
+def md_to_telegram_html(text: str) -> str:
+    """Convert agent-style Markdown to the Telegram HTML subset.
+
+    Handles `# / ## / ###` → `<b>`, `**bold**` → `<b>`, `` `code` `` →
+    `<code>`, fenced ```code``` blocks → `<pre>`, leading `- ` → `• `,
+    strips the result envelope, and HTML-escapes special chars *inside*
+    code/pre blocks (so SQL operators like `<>` don't break the parser).
+
+    Idempotent on already-converted Telegram HTML (raw `<b>` etc. has
+    no Markdown sigils for the regex passes to touch).
+    """
+    if not text:
+        return text
+    out = strip_result_envelope(text)
+    # Fenced code blocks first (so inline-code regex doesn't mangle them).
+    # Strip inner literal `<code>`/`<pre>` tags from the body — LLM
+    # double-wrapping defence; see _INNER_CODE_TAG_RE.
+    out = _MD_CODE_FENCE_RE.sub(
+        lambda m: f"<pre>{_INNER_CODE_TAG_RE.sub('', m.group(1)).rstrip()}</pre>", out
+    )
+    out = _MD_HEADING_RE.sub(r'<b>\1</b>', out)
+    out = _MD_BOLD_RE.sub(r'<b>\1</b>', out)
+    out = _MD_CODE_INLINE_RE.sub(
+        lambda m: f"<code>{_INNER_CODE_TAG_RE.sub('', m.group(1))}</code>", out
+    )
+    out = _MD_BULLET_RE.sub(r'\1• ', out)
+    # Final pass: protect <code>/<pre> body from Telegram's strict HTML parser.
+    out = _escape_code_block_content(out)
+    return out
+
+
+# ----- Discord (native Markdown) -----------------------------------------
+
+
+def md_to_discord(text: str) -> str:
+    """Adapt agent-style Markdown for Discord.
+
+    Discord's renderer already handles `#`/`##`/`###` headings,
+    `**bold**`, `*italic*`, `` `code` ``, fenced ```code``` blocks,
+    `- bullets`, and `[text](url)` natively (heading support added
+    2023). So this is mostly a passthrough — the only required clean-up
+    is stripping the result envelope markers.
+
+    Kept as an explicit function (instead of an alias) so a future
+    Discord-specific tweak (e.g. mention-escaping, length-trimming)
+    has a dedicated place to live.
+    """
+    if not text:
+        return text
+    return strip_result_envelope(text)
+
+
+# ----- Slack (mrkdwn) -----------------------------------------------------
+
+_SLACK_MASK_TOKEN = "\x00SLACKCODE{i}\x00"
+
+
+def md_to_slack(text: str) -> str:
+    """Convert agent-style Markdown to Slack mrkdwn.
+
+    Slack's mrkdwn differs from standard Markdown: bold is single
+    `*asterisk*`, there are no headings, and links are `<url|text>`.
+    Code spans and fences render as-is, so they're masked first to keep
+    the bold/heading passes from corrupting code content.
+    """
+    if not text:
+        return text
+    out = strip_result_envelope(text)
+
+    # Mask code (fenced first, then inline) so the transforms below
+    # never touch code content.
+    blocks: list[str] = []
+
+    def _mask(m: re.Match) -> str:
+        blocks.append(m.group(0))
+        return _SLACK_MASK_TOKEN.format(i=len(blocks) - 1)
+
+    out = re.sub(r'```.*?```', _mask, out, flags=re.DOTALL)
+    out = _MD_CODE_INLINE_RE.sub(_mask, out)
+
+    out = _MD_HEADING_RE.sub(r'*\1*', out)
+    out = _MD_BOLD_RE.sub(r'*\1*', out)
+    out = _MD_BULLET_RE.sub(r'\1• ', out)
+    out = _MD_LINK_RE.sub(r'<\2|\1>', out)
+
+    for i, block in enumerate(blocks):
+        out = out.replace(_SLACK_MASK_TOKEN.format(i=i), block)
+    return out
+
+
+# ----- LINE / generic plain text -----------------------------------------
+
+
+def md_to_plain(text: str) -> str:
+    """Strip ALL Markdown to plain text for channels that render nothing.
+
+    LINE's `type: text` message renders literal characters — `##`,
+    `**`, backticks all show as-is. So we collapse them all into the
+    underlying text. Bullets become Unicode `•` so the visual rhythm
+    survives.
+
+    Idempotent on already-plain text (nothing to strip).
+    """
+    if not text:
+        return text
+    out = strip_result_envelope(text)
+    # Fenced code blocks → just keep the code content
+    out = _MD_CODE_FENCE_RE.sub(lambda m: m.group(1).rstrip(), out)
+    # Headings → strip leading # marks, keep the text
+    out = _MD_HEADING_RE.sub(r'\1', out)
+    # Bold → drop the **
+    out = _MD_BOLD_RE.sub(r'\1', out)
+    # Inline code → strip backticks
+    out = _MD_CODE_INLINE_RE.sub(r'\1', out)
+    # Bullets → Unicode dot (preserves layout without leaving Markdown sigil)
+    out = _MD_BULLET_RE.sub(r'\1• ', out)
+    # Inline links [text](url) → "text (url)" so the URL is still visible
+    out = _MD_LINK_RE.sub(r'\1 (\2)', out)
+    return out
+
+
+__all__ = [
+    "strip_result_envelope",
+    "md_to_telegram_html",
+    "md_to_discord",
+    "md_to_slack",
+    "md_to_plain",
+]

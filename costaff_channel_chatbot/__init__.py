@@ -12,6 +12,14 @@ from .adk_client import (
     sync_identity,
 )
 from .dedup import MessageDedup
+from .envelope import ParsedEnvelope, parse_result_envelope
+from .formatters import (
+    md_to_discord,
+    md_to_plain,
+    md_to_slack,
+    md_to_telegram_html,
+    strip_result_envelope,
+)
 from .rate_limit import RateLimiter
 from .response import (
     ATTACHMENT_HINT,
@@ -21,6 +29,7 @@ from .response import (
     resolve_path,
     restore_code_blocks,
     rewrite_with_hint,
+    split_message,
     strip_leftover_hints,
     truncate,
 )
@@ -52,10 +61,18 @@ __all__ = [
     "ERROR_MSG",
     "PENDING_MSG",
     "RATE_LIMIT_MSG",
+    "ParsedEnvelope",
     "check_approved",
     "create_new_session",
     "delete_session",
     "extract_path_candidates",
+    "md_to_discord",
+    "md_to_plain",
+    "md_to_slack",
+    "md_to_telegram_html",
+    "parse_result_envelope",
+    "split_message",
+    "strip_result_envelope",
     "get_active_session_id",
     "get_user_id",
     "protect_code_blocks",

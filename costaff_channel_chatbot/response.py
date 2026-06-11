@@ -184,3 +184,46 @@ def truncate(text: str, max_length: int, suffix: str = "\n\n...(訊息過長，�
     if len(text) <= max_length:
         return text
     return text[: max_length - len(suffix)] + suffix
+
+
+# Margin reserved inside each chunk for fence re-balancing ("\n```" +
+# "```\n") so a closed/reopened code block never pushes a chunk past the
+# platform limit.
+_SPLIT_MARGIN = 10
+
+
+def split_message(text: str, max_length: int) -> list[str]:
+    """Split `text` into chunks of at most `max_length`, preferring
+    paragraph then line then word boundaries (never below half a chunk,
+    so a wall of text without newlines still splits near the limit).
+
+    Fence-aware: when a cut lands inside a ```fenced``` block, the chunk
+    is closed with ``` and the next chunk reopens with ```, so every
+    chunk renders as valid Markdown on its own."""
+    if max_length <= _SPLIT_MARGIN * 2:
+        return [text]  # degenerate limit — refuse to shred the text
+    if len(text) <= max_length:
+        return [text]
+
+    chunks: list[str] = []
+    rest = text
+    window_size = max_length - _SPLIT_MARGIN
+    while len(rest) > max_length:
+        window = rest[:window_size]
+        cut = window.rfind("\n\n")
+        if cut < window_size // 2:
+            cut = window.rfind("\n")
+        if cut < window_size // 2:
+            cut = window.rfind(" ")
+        if cut < window_size // 2:
+            cut = window_size
+        chunk = rest[:cut].rstrip()
+        rest = rest[cut:].lstrip(" \n")
+        if chunk.count("```") % 2 == 1:
+            chunk += "\n```"
+            rest = "```\n" + rest
+        if chunk:
+            chunks.append(chunk)
+    if rest:
+        chunks.append(rest)
+    return chunks
