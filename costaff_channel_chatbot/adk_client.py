@@ -172,11 +172,15 @@ async def ensure_session(app: str, uid: str, sid: str) -> bool:
         logger.warning(f"Failed to ensure session {sid}: {e}")
         return False
 
-async def create_new_session(app: str, uid: str) -> str:
-    """Create a brand-new ADK session (auto-generated ID). Returns the new session ID."""
+async def create_new_session(app: str, uid: str, state: dict | None = None) -> str:
+    """Create a brand-new ADK session (auto-generated ID). Returns the new session ID.
+
+    `state` seeds the session's initial state — used by callers (e.g. the
+    WebChat-Enterprise host) to carry a verified identity into the remote
+    Manager's session, server-side and not via the LLM. Defaults to {} (no-op)."""
     url = f"{ADK_URL}/apps/{app}/users/{uid}/sessions"
     client = _get_http_client()
-    res = await client.post(url, json={})
+    res = await client.post(url, json={"state": state or {}})
     res.raise_for_status()
     return res.json()["id"]
 
