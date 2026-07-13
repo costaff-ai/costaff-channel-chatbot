@@ -66,6 +66,30 @@ class ChannelAdapter(ABC):
         notifications). On platforms with reply-token semantics (LINE), this
         must use the push API, not the reply API."""
 
+    async def push_frame(self, real_id: str, frame: dict) -> None:
+        """Deliver a STRUCTURED push frame to `real_id`.
+
+        Frames come from the shared internal-push receiver
+        (`internal_push.make_internal_push_router`) and carry a `type`:
+        `agent_text` (a finished reply), `agent_progress` (a sub-agent step),
+        or `agent_file` (a download). The default renders each frame to plain
+        text and routes it through `push()`, so a channel only needs to
+        implement `push()` to receive async results. Channels with a
+        structured client transport (a WebSocket or SSE stream) override this
+        to forward the frame verbatim and render text / progress / files
+        distinctly."""
+        ftype = frame.get("type")
+        if ftype == "agent_text":
+            text = frame.get("text", "")
+            if text:
+                await self.push(real_id, text)
+        elif ftype == "agent_progress":
+            text = frame.get("text") or ""
+            if text:
+                await self.push(real_id, text)
+        elif ftype == "agent_file":
+            await self.push(real_id, self.attachment_hint or "（附件）")
+
     async def deliver(
         self, msg: IncomingMessage, text: str, file_paths: list[str]
     ) -> None:

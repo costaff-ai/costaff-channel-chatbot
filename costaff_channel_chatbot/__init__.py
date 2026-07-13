@@ -20,6 +20,7 @@ from .formatters import (
     md_to_telegram_html,
     strip_result_envelope,
 )
+from .internal_push import PushRequest, make_internal_push_router
 from .rate_limit import RateLimiter
 from .response import (
     ATTACHMENT_HINT,
@@ -51,7 +52,9 @@ __all__ = [
     "ChannelRuntime",
     "IncomingMessage",
     "MessageDedup",
+    "PushRequest",
     "RateLimiter",
+    "make_internal_push_router",
     "ATTACHMENT_HINT",
     "DATA_ROOT",
     "DEFAULT_ERROR_MSG",
