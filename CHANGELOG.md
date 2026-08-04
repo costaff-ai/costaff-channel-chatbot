@@ -6,6 +6,12 @@ All notable changes to this project are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-04
+
+First stable release of the shared channel library. No code changes since
+`v0.1.0-beta-3`. Channels should now pin
+`costaff-channel-chatbot @ git+https://…@v0.1.0`.
+
 ## [0.1.0-beta-3] - 2026-07-14
 
 First tagged release of the shared channel library. Channels should pin this
